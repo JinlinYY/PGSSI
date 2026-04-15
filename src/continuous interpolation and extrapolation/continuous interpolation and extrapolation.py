@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
@@ -25,15 +25,15 @@ FIG_BG = "#ffffff"
 AX_BG = "#ffffff"
 TEXT_COLOR = "#243746"
 GRID_COLOR = "#e4e8ec"
-SPINE_COLOR = "#7b8794"
-BOX_EDGE = "#9aa7b3"
+SPINE_COLOR = "#000000"
+BOX_EDGE = "#000000"
 DISTANCE_CMAP = LinearSegmentedColormap.from_list(
     "temperature_distance",
-    ["#eef6f4", "#b9d8d0", "#74aba2", "#326b70", "#17384b"],
+    ["#1d5a72", "#4e8aa2", "#a8c7cb", "#e9d6b0", "#bf6f59"],
 )
 ERROR_CMAP = LinearSegmentedColormap.from_list(
     "temperature_error",
-    ["#f3f7fb", "#c4d9ea", "#7fa7c6", "#3e678e", "#1f3955"],
+    ["#244b67", "#5a86a3", "#b7d4d9", "#edd7ac", "#d57a61"],
 )
 REGIME_COLORS = {
     "interpolation": "#3b7f7a",
@@ -115,10 +115,10 @@ def style_axes(ax, equal: bool = False):
         ax.set_aspect("equal", adjustable="box")
 
 
-def style_colorbar(cbar, label: str):
+def style_colorbar(cbar, label: str, labelsize: int = 19, ticksize: int = 17):
     cbar.set_label(label, color=TEXT_COLOR, labelpad=10)
-    cbar.ax.yaxis.label.set_size(19)
-    cbar.ax.tick_params(colors=TEXT_COLOR, width=0.9, length=4, labelsize=17)
+    cbar.ax.yaxis.label.set_size(labelsize)
+    cbar.ax.tick_params(colors=TEXT_COLOR, width=0.9, length=4, labelsize=ticksize)
     cbar.outline.set_edgecolor(SPINE_COLOR)
     cbar.outline.set_linewidth(0.9)
 
@@ -183,22 +183,32 @@ def metric_summary(df: pd.DataFrame, pred_column: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def add_metric_box(ax, y_true: np.ndarray, y_pred: np.ndarray, n_samples: int):
+def add_metric_box(
+    ax,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    n_samples: int,
+    *,
+    fontsize: int = 20,
+    x: float = 0.035,
+    y: float = 0.968,
+    box_pad: float = 0.62,
+):
     mae = mean_absolute_error(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     r2 = r2_score(y_true, y_pred)
     text = f"n = {n_samples}\nMAE {mae:.4f}\nRMSE {rmse:.4f}\nR2   {r2:.4f}"
     ax.text(
-        0.035,
-        0.968,
+        x,
+        y,
         text,
         transform=ax.transAxes,
         va="top",
         ha="left",
-        fontsize=20,
+        fontsize=fontsize,
         color=TEXT_COLOR,
         linespacing=1.24,
-        bbox={"boxstyle": "round,pad=0.62", "fc": FIG_BG, "ec": BOX_EDGE, "lw": 1.05, "alpha": 0.985},
+        bbox={"boxstyle": f"round,pad={box_pad}", "fc": FIG_BG, "ec": BOX_EDGE, "lw": 1.05, "alpha": 0.985},
         zorder=10,
     )
 
@@ -269,23 +279,18 @@ def plot_temperature_triptych(df: pd.DataFrame, pred_column: str, output_dir: Pa
     vmax = float(np.nanmax(dist)) if np.nanmax(dist) > np.nanmin(dist) else float(np.nanmin(dist) + 1.0)
     norm = Normalize(vmin=float(np.nanmin(dist)), vmax=vmax)
 
-    lim_min = min(full["log-gamma"].min(), full[pred_column].min())
-    lim_max = max(full["log-gamma"].max(), full[pred_column].max())
-    pad = 0.04 * max(lim_max - lim_min, 1.0)
-
-    fig = plt.figure(figsize=(28.6, 9.15), constrained_layout=False)
+    fig = plt.figure(figsize=(12.9, 5.05), constrained_layout=False)
     grid = fig.add_gridspec(
         1,
         len(available) + 1,
-        width_ratios=[1.0] * len(available) + [0.048],
-        wspace=0.08,
+        width_ratios=[1.0] * len(available) + [0.018],
+        wspace=0.002,
     )
     axes = []
     for idx in range(len(available)):
-        share_ax = axes[0] if axes else None
-        axes.append(fig.add_subplot(grid[0, idx], sharex=share_ax, sharey=share_ax))
+        axes.append(fig.add_subplot(grid[0, idx]))
     cax = fig.add_subplot(grid[0, -1])
-    fig.subplots_adjust(left=0.046, right=0.988, bottom=0.115, top=0.92)
+    fig.subplots_adjust(left=0.048, right=0.992, bottom=0.17, top=0.865)
 
     scatter = None
     for idx, (ax, (regime, title)) in enumerate(zip(axes, available)):
@@ -293,31 +298,33 @@ def plot_temperature_triptych(df: pd.DataFrame, pred_column: str, output_dir: Pa
         y_true = subset["log-gamma"].to_numpy(dtype=float)
         y_pred = subset[pred_column].to_numpy(dtype=float)
         color_values = subset["distance"].to_numpy(dtype=float)
-        ax.plot([lim_min - pad, lim_max + pad], [lim_min - pad, lim_max + pad], ls="--", lw=1.55, c=SPINE_COLOR, zorder=1)
+        lim_min = min(y_true.min(), y_pred.min())
+        lim_max = max(y_true.max(), y_pred.max())
+        pad = 0.05 * max(lim_max - lim_min, 1.0)
+        ax.plot([lim_min - pad, lim_max + pad], [lim_min - pad, lim_max + pad], ls="--", lw=1.45, c=SPINE_COLOR, zorder=1)
         scatter = ax.scatter(
             y_true,
             y_pred,
             c=color_values,
             cmap=cmap,
             norm=norm,
-            s=88,
-            alpha=0.92,
+            s=56,
+            alpha=0.9,
             edgecolors=FIG_BG,
-            linewidths=0.55,
+            linewidths=0.42,
             zorder=3,
         )
-        ax.set_title(title)
-        ax.set_xlabel(r"Experimental $\ln(\gamma^\infty)$")
+        ax.set_title(title, fontsize=20, pad=6)
+        ax.set_xlabel(r"Experimental $\ln(\gamma^\infty)$", fontsize=17, labelpad=5)
         ax.set_xlim(lim_min - pad, lim_max + pad)
         ax.set_ylim(lim_min - pad, lim_max + pad)
         style_axes(ax, equal=True)
-        add_metric_box(ax, y_true, y_pred, len(subset))
-        if idx > 0:
-            ax.tick_params(labelleft=False)
+        ax.tick_params(axis="both", labelsize=14, pad=3)
+        add_metric_box(ax, y_true, y_pred, len(subset), fontsize=15, x=0.03, y=0.94, box_pad=0.42)
 
-    axes[0].set_ylabel(r"Predicted $\ln(\gamma^\infty)$")
+    axes[0].set_ylabel(r"Predicted $\ln(\gamma^\infty)$", fontsize=17, labelpad=6)
     cbar = fig.colorbar(scatter, cax=cax)
-    style_colorbar(cbar, "Temperature distance (°C)")
+    style_colorbar(cbar, "Temperature distance (°C)", labelsize=16, ticksize=13)
     fig.savefig(output_dir / "interpolation_extrapolation_overview.png", dpi=dpi)
     fig.savefig(output_dir / "interpolation_extrapolation_overview.pdf")
     fig.savefig(output_dir / "temperature_regimes_triptych.png", dpi=dpi)
