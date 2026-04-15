@@ -60,7 +60,7 @@ NATURE_BG = "#ffffff"
 NATURE_AXES_BG = "#ffffff"
 NATURE_TEXT = "#22313f"
 NATURE_GRID = "#d9d2c4"
-NATURE_SPINE = "#5e6d79"
+NATURE_SPINE = "#000000"
 NATURE_LOWER_BETTER_CMAP = LinearSegmentedColormap.from_list(
     "nature_lower_better",
     ["#1d5a72", "#4e8aa2", "#a8c7cb", "#e9d6b0", "#bf6f59"],
@@ -110,7 +110,7 @@ def configure_publication_style() -> None:
             "legend.fontsize": 18,
             "legend.title_fontsize": 18,
             "legend.facecolor": "#ffffff",
-            "legend.edgecolor": "#c4bcad",
+            "legend.edgecolor": "#000000",
             "legend.framealpha": 0.96,
             "figure.titlesize": 24,
             "figure.titleweight": "normal",
@@ -358,12 +358,21 @@ def style_axes(ax) -> None:
         spine.set_color(NATURE_SPINE)
 
 
-def style_colorbar(colorbar, label: str) -> None:
-    colorbar.set_label(label, labelpad=10)
-    colorbar.ax.tick_params(colors=NATURE_TEXT, width=0.9, length=4)
+def style_colorbar(
+    colorbar,
+    label: str,
+    labelsize: int = 17,
+    ticksize: int = 13,
+    labelpad: int = 10,
+) -> None:
+    colorbar.set_label(label, labelpad=labelpad)
+    colorbar.ax.yaxis.label.set_size(labelsize)
+    colorbar.ax.tick_params(colors=NATURE_TEXT, width=0.9, length=4, labelsize=ticksize)
     colorbar.outline.set_linewidth(1.0)
     colorbar.outline.set_edgecolor(NATURE_SPINE)
     colorbar.ax.yaxis.label.set_color(NATURE_TEXT)
+    colorbar.ax.yaxis.set_label_position("right")
+    colorbar.ax.yaxis.set_ticks_position("right")
 
 
 def style_legend(legend) -> None:
@@ -371,7 +380,7 @@ def style_legend(legend) -> None:
         return
     frame = legend.get_frame()
     frame.set_facecolor("#ffffff")
-    frame.set_edgecolor("#c4bcad")
+    frame.set_edgecolor("#000000")
     frame.set_linewidth(1.0)
     frame.set_alpha(0.96)
 
@@ -392,6 +401,74 @@ def metric_color_settings(metric_name: str, values: pd.Series):
     return cmap, Normalize(vmin=vmin, vmax=vmax)
 
 
+def prepare_metric_bubble_plot(metrics_df: pd.DataFrame, min_count: int):
+    plot_df = metrics_df.loc[metrics_df["count"] >= min_count].copy()
+    if plot_df.empty:
+        raise ValueError(f"No family combinations meet min_count={min_count}.")
+
+    solvent_levels = [name for name in FAMILY_ORDER if name in set(plot_df["plot_solvent_family"])]
+    solute_levels = [name for name in reversed(FAMILY_ORDER) if name in set(plot_df["plot_solute_family"])]
+    solvent_index = {name: idx for idx, name in enumerate(solvent_levels)}
+    solute_index = {name: idx for idx, name in enumerate(solute_levels)}
+
+    plot_df["x"] = plot_df["plot_solvent_family"].map(solvent_index)
+    plot_df["y"] = plot_df["plot_solute_family"].map(solute_index)
+    plot_df["area"] = size_to_area(plot_df["count"].to_numpy())
+    return plot_df, solvent_levels, solute_levels
+
+
+def draw_metric_bubble_axis(
+    ax,
+    cax,
+    plot_df: pd.DataFrame,
+    solvent_levels: list[str],
+    solute_levels: list[str],
+    metric_name: str,
+    *,
+    show_ylabel: bool,
+    show_yticklabels: bool,
+    colorbar_labelsize: int = 17,
+    colorbar_ticksize: int = 13,
+    colorbar_labelpad: int = 10,
+) -> None:
+    cmap, norm = metric_color_settings(metric_name, plot_df[metric_name])
+    sc = ax.scatter(
+        plot_df["x"],
+        plot_df["y"],
+        s=plot_df["area"],
+        c=plot_df[metric_name],
+        cmap=cmap,
+        norm=norm,
+        alpha=0.96,
+        edgecolors=NATURE_AXES_BG,
+        linewidths=0.8,
+    )
+
+    ax.set_xticks(range(len(solvent_levels)))
+    ax.set_xticklabels(solvent_levels, rotation=55, ha="right")
+    ax.set_yticks(range(len(solute_levels)))
+    ax.set_yticklabels(solute_levels if show_yticklabels else [])
+    ax.set_xlim(-0.45, len(solvent_levels) - 0.55)
+    ax.set_ylim(-0.45, len(solute_levels) - 0.55)
+    style_axes(ax)
+    ax.tick_params(axis="both", labelsize=15)
+    ax.set_xlabel("Solvent Family", fontsize=18)
+    if show_ylabel:
+        ax.set_ylabel("Solute Family", fontsize=18)
+    else:
+        ax.set_ylabel("")
+    ax.set_title(metric_name, fontsize=22, pad=8)
+
+    cbar = ax.figure.colorbar(sc, cax=cax)
+    style_colorbar(
+        cbar,
+        "Higher is better" if metric_name == "R2" else "Lower is better",
+        labelsize=colorbar_labelsize,
+        ticksize=colorbar_ticksize,
+        labelpad=colorbar_labelpad,
+    )
+
+
 def draw_metric_bubble_panels(
     metrics_df: pd.DataFrame,
     output_path: Path,
@@ -406,50 +483,33 @@ def draw_metric_bubble_figure(
     metrics_df: pd.DataFrame,
     min_count: int,
 ):
-    plot_df = metrics_df.loc[metrics_df["count"] >= min_count].copy()
-    if plot_df.empty:
-        raise ValueError(f"No family combinations meet min_count={min_count}.")
+    plot_df, solvent_levels, solute_levels = prepare_metric_bubble_plot(metrics_df, min_count)
 
-    solvent_levels = [name for name in FAMILY_ORDER if name in set(plot_df["plot_solvent_family"])]
-    solute_levels = [name for name in reversed(FAMILY_ORDER) if name in set(plot_df["plot_solute_family"])]
-    solvent_index = {name: idx for idx, name in enumerate(solvent_levels)}
-    solute_index = {name: idx for idx, name in enumerate(solute_levels)}
-
-    plot_df["x"] = plot_df["plot_solvent_family"].map(solvent_index)
-    plot_df["y"] = plot_df["plot_solute_family"].map(solute_index)
-    plot_df["area"] = size_to_area(plot_df["count"].to_numpy())
-
-    fig, axes = plt.subplots(1, 3, figsize=(20.8, 9.8), constrained_layout=True)
+    fig = plt.figure(figsize=(17.0, 5.95), constrained_layout=False)
+    outer = fig.add_gridspec(1, 3, wspace=0.16)
+    axes = []
+    caxes = []
+    for idx in range(3):
+        pair = outer[0, idx].subgridspec(1, 2, width_ratios=[1.0, 0.028], wspace=0.04)
+        axes.append(fig.add_subplot(pair[0, 0]))
+        caxes.append(fig.add_subplot(pair[0, 1]))
+    fig.subplots_adjust(left=0.055, right=0.992, bottom=0.24, top=0.87)
     metrics = ["MAE", "RMSE", "R2"]
 
-    for ax, metric_name, panel_idx in zip(axes, metrics, range(3)):
-        cmap, norm = metric_color_settings(metric_name, plot_df[metric_name])
-        sc = ax.scatter(
-            plot_df["x"],
-            plot_df["y"],
-            s=plot_df["area"],
-            c=plot_df[metric_name],
-            cmap=cmap,
-            norm=norm,
-            alpha=0.96,
-            edgecolors=NATURE_AXES_BG,
-            linewidths=0.8,
+    for ax, cax, metric_name, panel_idx in zip(axes, caxes, metrics, range(3)):
+        draw_metric_bubble_axis(
+            ax=ax,
+            cax=cax,
+            plot_df=plot_df,
+            solvent_levels=solvent_levels,
+            solute_levels=solute_levels,
+            metric_name=metric_name,
+            show_ylabel=False,
+            show_yticklabels=panel_idx == 0,
+            colorbar_labelsize=15,
+            colorbar_ticksize=13,
+            colorbar_labelpad=5,
         )
-
-        ax.set_xticks(range(len(solvent_levels)))
-        ax.set_xticklabels(solvent_levels, rotation=55, ha="right")
-        ax.set_yticks(range(len(solute_levels)))
-        ax.set_yticklabels(solute_levels)
-        ax.set_xlim(-0.45, len(solvent_levels) - 0.55)
-        ax.set_ylim(-0.45, len(solute_levels) - 0.55)
-        style_axes(ax)
-        ax.set_xlabel("Solvent Family")
-        if panel_idx == 0:
-            ax.set_ylabel("Solute Family")
-        ax.set_title(metric_name, pad=12)
-
-        cbar = fig.colorbar(sc, ax=ax, fraction=0.05, pad=0.03, shrink=0.93)
-        style_colorbar(cbar, "Higher is better" if metric_name == "R2" else "Lower is better")
 
     return fig, plot_df
 
@@ -472,7 +532,8 @@ def draw_parity_plot(
     group_column: str | None,
     top_groups: int,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10.2, 10.2))
+    fig, ax = plt.subplots(figsize=(6.9, 5.95), constrained_layout=False)
+    fig.subplots_adjust(left=0.11, right=0.94, bottom=0.13, top=0.965)
     draw_parity_axis(
         ax=ax,
         fig=fig,
@@ -494,6 +555,11 @@ def draw_parity_axis(
     pred_column: str,
     group_column: str | None,
     top_groups: int,
+    colorbar_ax=None,
+    metric_box_fontsize: int = 18,
+    metric_box_pad: float = 0.38,
+    metric_box_x: float = 0.045,
+    metric_box_y: float = 0.955,
 ) -> None:
     metrics = compute_global_metrics(df, true_column, pred_column)
 
@@ -528,8 +594,11 @@ def draw_parity_axis(
             edgecolors=NATURE_AXES_BG,
             linewidths=0.35,
         )
-        cbar = fig.colorbar(scatter, ax=ax, fraction=0.05, pad=0.03, shrink=0.93)
-        style_colorbar(cbar, "|Error|")
+        if colorbar_ax is not None:
+            cbar = fig.colorbar(scatter, cax=colorbar_ax)
+        else:
+            cbar = fig.colorbar(scatter, ax=ax, fraction=0.045, pad=0.018, shrink=0.985)
+        style_colorbar(cbar, "|Error|", labelsize=16, ticksize=12)
 
     low = float(min(df[true_column].min(), df[pred_column].min()))
     high = float(max(df[true_column].max(), df[pred_column].max()))
@@ -540,22 +609,27 @@ def draw_parity_axis(
     ax.plot([low, high], [low, high], linestyle="--", linewidth=1.8, color=NATURE_SPINE, label="y = x")
     ax.set_xlim(low, high)
     ax.set_ylim(low, high)
-    ax.set_xlabel("True log-gamma")
-    ax.set_ylabel("Predicted log-gamma")
+    ax.set_xlabel(r"Experimental $\ln(\gamma^\infty)$")
+    ax.set_ylabel(r"Predicted $\ln(\gamma^\infty)$")
     style_axes(ax)
     ax.set_aspect("equal", adjustable="box")
 
     metric_text = f"MAE  {metrics['MAE']:.4f}\nRMSE {metrics['RMSE']:.4f}\nR2   {metrics['R2']:.4f}"
     ax.text(
-        0.05,
-        0.95,
+        metric_box_x,
+        metric_box_y,
         metric_text,
         transform=ax.transAxes,
         va="top",
         ha="left",
-        fontsize=20,
+        fontsize=metric_box_fontsize,
         linespacing=1.25,
-        bbox={"boxstyle": "round,pad=0.45", "facecolor": "#ffffff", "edgecolor": "#9aa9b2", "alpha": 0.97},
+        bbox={
+            "boxstyle": f"round,pad={metric_box_pad}",
+            "facecolor": "#ffffff",
+            "edgecolor": "#000000",
+            "alpha": 0.97,
+        },
     )
 
     if group_column and group_column in df.columns:
@@ -576,26 +650,28 @@ def draw_combined_figure(
     top_groups: int,
     min_count: int,
 ) -> None:
-    plot_df = metrics_df.loc[metrics_df["count"] >= min_count].copy()
-    if plot_df.empty:
-        raise ValueError(f"No family combinations meet min_count={min_count}.")
+    plot_df, solvent_levels, solute_levels = prepare_metric_bubble_plot(metrics_df, min_count)
 
-    solvent_levels = [name for name in FAMILY_ORDER if name in set(plot_df["plot_solvent_family"])]
-    solute_levels = [name for name in reversed(FAMILY_ORDER) if name in set(plot_df["plot_solute_family"])]
-    solvent_index = {name: idx for idx, name in enumerate(solvent_levels)}
-    solute_index = {name: idx for idx, name in enumerate(solute_levels)}
-
-    plot_df["x"] = plot_df["plot_solvent_family"].map(solvent_index)
-    plot_df["y"] = plot_df["plot_solute_family"].map(solute_index)
-    plot_df["area"] = size_to_area(plot_df["count"].to_numpy())
-
-    fig, axes = plt.subplots(
+    fig = plt.figure(figsize=(21.0, 6.3), constrained_layout=False)
+    grid = fig.add_gridspec(
         1,
-        4,
-        figsize=(31.5, 10.2),
-        constrained_layout=True,
-        gridspec_kw={"width_ratios": [1.08, 1, 1, 1]},
+        8,
+        width_ratios=[0.92, 0.035, 1.0, 0.035, 1.0, 0.035, 1.0, 0.035],
+        wspace=0.12,
     )
+    axes = [
+        fig.add_subplot(grid[0, 0]),
+        fig.add_subplot(grid[0, 2]),
+        fig.add_subplot(grid[0, 4]),
+        fig.add_subplot(grid[0, 6]),
+    ]
+    caxes = [
+        fig.add_subplot(grid[0, 1]),
+        fig.add_subplot(grid[0, 3]),
+        fig.add_subplot(grid[0, 5]),
+        fig.add_subplot(grid[0, 7]),
+    ]
+    fig.subplots_adjust(left=0.04, right=0.992, bottom=0.23, top=0.88)
 
     draw_parity_axis(
         ax=axes[0],
@@ -605,38 +681,26 @@ def draw_combined_figure(
         pred_column=pred_column,
         group_column=group_column,
         top_groups=top_groups,
+        colorbar_ax=caxes[0],
+        metric_box_fontsize=16,
+        metric_box_pad=0.36,
+        metric_box_x=0.04,
+        metric_box_y=0.94,
     )
-    axes[0].set_title("Parity", pad=12)
+    axes[0].set_title("Parity", pad=8)
 
     metrics = ["MAE", "RMSE", "R2"]
-    for ax, metric_name, panel_idx in zip(axes[1:], metrics, range(3)):
-        cmap, norm = metric_color_settings(metric_name, plot_df[metric_name])
-        sc = ax.scatter(
-            plot_df["x"],
-            plot_df["y"],
-            s=plot_df["area"],
-            c=plot_df[metric_name],
-            cmap=cmap,
-            norm=norm,
-            alpha=0.96,
-            edgecolors=NATURE_AXES_BG,
-            linewidths=0.8,
+    for ax, cax, metric_name, panel_idx in zip(axes[1:], caxes[1:], metrics, range(3)):
+        draw_metric_bubble_axis(
+            ax=ax,
+            cax=cax,
+            plot_df=plot_df,
+            solvent_levels=solvent_levels,
+            solute_levels=solute_levels,
+            metric_name=metric_name,
+            show_ylabel=False,
+            show_yticklabels=panel_idx == 0,
         )
-
-        ax.set_xticks(range(len(solvent_levels)))
-        ax.set_xticklabels(solvent_levels, rotation=55, ha="right")
-        ax.set_yticks(range(len(solute_levels)))
-        ax.set_yticklabels(solute_levels)
-        ax.set_xlim(-0.45, len(solvent_levels) - 0.55)
-        ax.set_ylim(-0.45, len(solute_levels) - 0.55)
-        style_axes(ax)
-        ax.set_xlabel("Solvent Family")
-        if panel_idx == 0:
-            ax.set_ylabel("Solute Family")
-        ax.set_title(metric_name, pad=12)
-
-        cbar = fig.colorbar(sc, ax=ax, fraction=0.05, pad=0.03, shrink=0.93)
-        style_colorbar(cbar, "Higher is better" if metric_name == "R2" else "Lower is better")
 
     fig.savefig(output_path, dpi=600, bbox_inches="tight")
     plt.close(fig)
