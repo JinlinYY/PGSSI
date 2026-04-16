@@ -28,11 +28,9 @@ from tqdm import tqdm
 try:
     from PGSSI_3D_architecture import PGSSIModel
     from PGSSI_data import GEOM_CACHE_VERSION, build_pair_dataset
-    from physics_loss import compute_physics_regularization
 except ImportError:
     from src.models.PGSSI.PGSSI_3D_architecture import PGSSIModel
     from src.models.PGSSI.PGSSI_data import GEOM_CACHE_VERSION, build_pair_dataset
-    from src.models.PGSSI.physics_loss import compute_physics_regularization
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -208,39 +206,6 @@ def predict_loader_with_indices(model, loader, device):
     return preds, indices
 
 
-def evaluate_physics_metrics(model, loader, device):
-    model.eval()
-    use_amp = device.type == "cuda"
-    metric_terms = {
-        "physics_reg": [],
-        "physics_smoothness": [],
-        "physics_short_range_repulsion": [],
-        "physics_long_range_decay": [],
-        "physics_charge_sign_consistency": [],
-        "physics_thermo_derivative": [],
-    }
-
-    with torch.no_grad():
-        for batch in loader:
-            if batch is None:
-                continue
-            batch = batch.to(device, non_blocking=use_amp)
-            with amp_autocast(device):
-                outputs = model(batch, return_dict=True)
-            physics_reg, terms = compute_physics_regularization(outputs)
-            metric_terms["physics_reg"].append(float(physics_reg.detach().cpu()))
-            metric_terms["physics_smoothness"].append(float(terms.get("smoothness", 0.0)))
-            metric_terms["physics_short_range_repulsion"].append(float(terms.get("short_range_repulsion", 0.0)))
-            metric_terms["physics_long_range_decay"].append(float(terms.get("long_range_decay", 0.0)))
-            metric_terms["physics_charge_sign_consistency"].append(float(terms.get("charge_sign_consistency", 0.0)))
-            metric_terms["physics_thermo_derivative"].append(float(terms.get("thermo_derivative", 0.0)))
-
-    summary = {}
-    for key, values in metric_terms.items():
-        summary[key] = float(np.mean(values)) if values else float("nan")
-    return summary
-
-
 def evaluate_test_file(
     model_path,
     test_path,
@@ -334,7 +299,6 @@ def evaluate_test_file(
             metrics["AE<=0.1_count"] = int(np.sum(abs_error <= 0.1))
             metrics["AE<=0.2_count"] = int(np.sum(abs_error <= 0.2))
             metrics["AE<=0.3_count"] = int(np.sum(abs_error <= 0.3))
-            metrics.update(evaluate_physics_metrics(model, loader, device))
 
     prediction_path = Path(output_dir) / f"{artifact_prefix}_{test_name}_predictions.csv"
     result_df.to_csv(prediction_path, index=False)
@@ -397,8 +361,6 @@ def train_PGSSI(train_df, model_name, hyperparameters, output_dir, cache_dir, re
     train_cache_prefix = hyperparameters.get("train_cache_prefix", "train")
     valid_cache_prefix = hyperparameters.get("valid_cache_prefix", "valid")
     checkpoint_interval = max(1, int(hyperparameters.get("checkpoint_interval", 10)))
-    physics_loss_weight = float(hyperparameters.get("physics_loss_weight", 0.0))
-    use_physics_loss = physics_loss_weight > 0.0
     init_model_path = hyperparameters.get("init_model_path")
     quiet_progress = bool(hyperparameters.get("quiet_progress", False))
     use_physics_prior = bool(hyperparameters.get("use_physics_prior", True))
@@ -463,7 +425,6 @@ def train_PGSSI(train_df, model_name, hyperparameters, output_dir, cache_dir, re
     print_report(f"Valid num_workers: {valid_num_workers if valid_df is not None else 0}")
     print_report(f"AMP enabled: {device.type == 'cuda'}")
     print_report(f"Checkpoint save interval: every {checkpoint_interval} epoch(s)")
-    print_report(f"Physics loss enabled: {use_physics_loss} | weight={physics_loss_weight}")
     print_report(
         f"Ablation switches | num_intra_layers={num_intra_layers} | "
         f"use_interaction_types={use_interaction_types} | use_moe={use_moe} | "
@@ -540,15 +501,9 @@ def train_PGSSI(train_df, model_name, hyperparameters, output_dir, cache_dir, re
                 continue
             batch = batch.to(device, non_blocking=device.type == "cuda")
             with amp_autocast(device):
-                outputs = model(batch, return_dict=use_physics_loss)
-                pred = outputs["log_gamma"].view(-1) if use_physics_loss else outputs.view(-1)
+                pred = model(batch).view(-1)
                 target = batch.y.view(-1).float()
-                supervised_loss = F.mse_loss(pred, target)
-                if use_physics_loss:
-                    physics_loss, _ = compute_physics_regularization(outputs)
-                    loss = supervised_loss + (physics_loss_weight * physics_loss)
-                else:
-                    loss = supervised_loss
+                loss = F.mse_loss(pred, target)
             target = batch.y.view(-1).float()
 
             optimizer.zero_grad(set_to_none=True)
@@ -712,7 +667,6 @@ def parse_args():
     # 启用后会从 runs/<run-dir>/<model-name>_resume.pth 恢复模型和优化器状态。
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--checkpoint-interval", type=int, default=10)
-    parser.add_argument("--physics-loss-weight", type=float, default=0.0)
     parser.add_argument("--init-model-path", type=str, default=None)
     parser.add_argument("--quiet-progress", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
@@ -768,7 +722,6 @@ def main():
             "valid_cache_prefix": dataset_cache_prefix(valid_path) if valid_path else "valid",
             "artifact_prefix": artifact_prefix,
             "checkpoint_interval": args.checkpoint_interval,
-            "physics_loss_weight": args.physics_loss_weight,
             "init_model_path": args.init_model_path,
             "quiet_progress": args.quiet_progress,
         },
