@@ -1,3 +1,9 @@
+"""PGSSI 可解释性主脚本：选样、边/节点消融、汇总图与 3D 面板。
+
+默认与 ``runs/pgssi_train`` 下 molecule_train 权重及预测对齐；可通过 ``--train-summary-json``
+恢复训练时架构。预测 CSV 与数据 CSV 须行对齐（按 SMILES+T 校验）。"""
+from __future__ import annotations
+
 import argparse
 import copy
 import json
@@ -67,7 +73,7 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="runs/pgssi_train_all_e3typed/all_merged_train_PGSSI_E3Typed_best.pth",
+        default="runs/pgssi_train/molecule_train_PGSSI_best.pth",
     )
     parser.add_argument(
         "--data-path",
@@ -77,7 +83,7 @@ def parse_args():
     parser.add_argument(
         "--predictions-path",
         type=str,
-        default="runs/pgssi_train_all_e3typed/all_merged_train_PGSSI_E3Typed_all_merged_test_predictions.csv",
+        default="runs/pgssi_train/molecule_train_PGSSI_all_merged_test_predictions.csv",
     )
     parser.add_argument(
         "--output-dir",
@@ -93,11 +99,28 @@ def parse_args():
         choices=["top_error", "lowest_error", "first"],
     )
     parser.add_argument("--hidden-dim", type=int, default=512)
-    parser.add_argument("--num-intra-layers", type=int, default=2)
+    parser.add_argument(
+        "--num-intra-layers",
+        type=int,
+        default=None,
+        help="分子内层数；默认从 --train-summary-json 读取，否则为 2。",
+    )
     parser.add_argument("--use-interaction-types", action="store_true", default=True)
     parser.add_argument("--disable-interaction-types", dest="use_interaction_types", action="store_false")
     parser.add_argument("--use-moe", action="store_true", default=True)
     parser.add_argument("--disable-moe", dest="use_moe", action="store_false")
+    parser.add_argument(
+        "--train-summary-json",
+        type=str,
+        default=str(REPO_ROOT / "runs" / "pgssi_train" / "molecule_train_PGSSI_summary.json"),
+        help="若存在则读取其中的架构开关；CLI 的 --disable-* 优先生效。",
+    )
+    parser.add_argument("--disable-cross-interaction", action="store_true")
+    parser.add_argument("--disable-physics-prior", action="store_true")
+    parser.add_argument("--disable-cross-refine", action="store_true")
+    parser.add_argument("--topology-only", action="store_true")
+    parser.add_argument("--direct-loggamma-head", action="store_true")
+    parser.add_argument("--disable-formula-layer", action="store_true")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--exclude-small-solvents", action="store_true", default=True)
     parser.add_argument("--allow-small-solvents", dest="exclude_small_solvents", action="store_false")
@@ -106,19 +129,123 @@ def parse_args():
     return parser.parse_args()
 
 
+def _resolve_repo_path(path_str: str | Path) -> Path:
+    p = Path(path_str)
+    return p if p.is_absolute() else (REPO_ROOT / p)
+
+
+def apply_pgssi_model_flags(args: argparse.Namespace) -> None:
+    """解析路径为绝对路径，并从训练 summary 合并架构开关（与 pgssi_feature_importance / PGSSI_eval 一致）。"""
+    args.model_path = str(_resolve_repo_path(args.model_path))
+    args.data_path = str(_resolve_repo_path(args.data_path))
+    args.predictions_path = str(_resolve_repo_path(args.predictions_path))
+    args.output_dir = str(_resolve_repo_path(args.output_dir))
+    args.cache_dir = str(_resolve_repo_path(args.cache_dir))
+
+    summary_path = _resolve_repo_path(args.train_summary_json)
+    flags: dict = {}
+    if summary_path.exists():
+        try:
+            with open(summary_path, encoding="utf-8") as fh:
+                flags = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            flags = {}
+
+    saved_use_interaction_types = bool(args.use_interaction_types)
+    saved_use_moe = bool(args.use_moe)
+
+    if args.num_intra_layers is None:
+        args.num_intra_layers = int(flags.get("num_intra_layers", 2))
+    else:
+        args.num_intra_layers = int(args.num_intra_layers)
+
+    args.enable_cross_interaction = bool(flags.get("enable_cross_interaction", True))
+    if getattr(args, "disable_cross_interaction", False):
+        args.enable_cross_interaction = False
+
+    if "use_interaction_types" in flags:
+        args.use_interaction_types = bool(flags["use_interaction_types"])
+    if not saved_use_interaction_types:
+        args.use_interaction_types = False
+
+    if "use_moe" in flags:
+        args.use_moe = bool(flags["use_moe"])
+    if not saved_use_moe:
+        args.use_moe = False
+
+    args.use_physics_prior = not bool(getattr(args, "disable_physics_prior", False))
+    args.disable_cross_refine = bool(getattr(args, "disable_cross_refine", False))
+    args.topology_only = bool(getattr(args, "topology_only", False))
+    args.direct_loggamma_head = bool(getattr(args, "direct_loggamma_head", False))
+    args.disable_formula_layer = bool(getattr(args, "disable_formula_layer", False))
+
+
+def _assert_prediction_rows_aligned(data_df: pd.DataFrame, pred_df: pd.DataFrame) -> None:
+    """保证预测表与数据表按行一一对应（与 pgssi_feature_importance.load_analysis_frame 一致）。"""
+    if len(data_df) != len(pred_df):
+        raise ValueError(f"预测表行数 ({len(pred_df)}) 与数据表 ({len(data_df)}) 不一致。")
+    key_cols = [c for c in ("Solvent_SMILES", "Solute_SMILES", "T") if c in data_df.columns and c in pred_df.columns]
+    if len(key_cols) < 2:
+        return
+    left = data_df[key_cols].reset_index(drop=True).copy()
+    right = pred_df[key_cols].reset_index(drop=True).copy()
+    if "T" in key_cols:
+        left["T"] = pd.to_numeric(left["T"], errors="coerce")
+        right["T"] = pd.to_numeric(right["T"], errors="coerce")
+    for col in key_cols:
+        if col != "T" and str(left[col].dtype) == "object":
+            left[col] = left[col].astype(str)
+            right[col] = right[col].astype(str)
+    for col in key_cols:
+        if col == "T":
+            la = left[col].to_numpy(dtype=float)
+            ra = right[col].to_numpy(dtype=float)
+            if la.shape != ra.shape or not np.allclose(la, ra, rtol=0.0, atol=1e-5, equal_nan=True):
+                raise ValueError(
+                    "data-path 与 predictions-path 按行不对齐（列 "
+                    f"{key_cols}）。请保证两表行序一致或在相同键上 join 后再导出预测。"
+                )
+        elif not left[col].equals(right[col]):
+            raise ValueError(
+                "data-path 与 predictions-path 按行不对齐（列 "
+                f"{key_cols}）。请保证两表行序一致或在相同键上 join 后再导出预测。"
+            )
+
+
 def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
 def load_model(args):
+    """构建 PGSSIModel 并加载权重。
+
+    与训练脚本对齐的可选属性（均可用 ``argparse.Namespace`` 或任意带属性的对象传入）：
+    ``enable_cross_interaction``, ``use_physics_prior``, ``disable_cross_refine``,
+    ``topology_only``, ``direct_loggamma_head``, ``disable_formula_layer``。
+    未设置时采用与 ``PGSSI_train`` 默认一致的行为。
+    """
     device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
+    enable_cross = getattr(args, "enable_cross_interaction", True)
+    use_physics_prior = getattr(args, "use_physics_prior", True)
+    disable_cross_refine = getattr(args, "disable_cross_refine", False)
+    topology_only = getattr(args, "topology_only", False)
+    direct_loggamma_head = getattr(args, "direct_loggamma_head", False)
+    disable_formula_layer = getattr(args, "disable_formula_layer", False)
     model = PGSSIModel(
         hidden_dim=args.hidden_dim,
-        enable_cross_interaction=True,
+        enable_cross_interaction=enable_cross,
         num_intra_layers=args.num_intra_layers,
         use_interaction_types=args.use_interaction_types,
         use_moe=args.use_moe,
+        use_physics_prior=use_physics_prior,
+        disable_cross_refine=disable_cross_refine,
+        topology_only=topology_only,
+        direct_loggamma_head=direct_loggamma_head,
+        disable_formula_layer=disable_formula_layer,
     ).to(device)
+    weight_path = Path(args.model_path)
+    if not weight_path.is_file():
+        raise FileNotFoundError(f"Model weights not found: {weight_path}")
     checkpoint = torch.load(args.model_path, map_location=device)
     state_dict = checkpoint["model_state_dict"] if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint else checkpoint
     remapped_state_dict = {}
@@ -132,6 +259,11 @@ def load_model(args):
         print(f"Unexpected checkpoint keys ignored: {unexpected}")
     if missing:
         print(f"Missing checkpoint keys left at current init: {missing}")
+        if len(missing) > 30:
+            print(
+                "WARNING: many missing keys — model architecture likely does not match the checkpoint "
+                "(check --hidden-dim, --train-summary-json, and ablation flags)."
+            )
     model.eval()
     return model, device
 
@@ -203,7 +335,10 @@ def predict_sample(model, data, device):
 
 
 def get_atom_symbols(smiles):
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    raw = Chem.MolFromSmiles(smiles)
+    if raw is None:
+        return []
+    mol = Chem.AddHs(raw)
     if mol is None:
         return []
     return [atom.GetSymbol() for atom in mol.GetAtoms()]
@@ -217,7 +352,10 @@ def heavy_atom_count(smiles):
 
 
 def functional_group_importance(smiles, atom_scores):
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    raw = Chem.MolFromSmiles(smiles)
+    if raw is None:
+        return []
+    mol = Chem.AddHs(raw)
     if mol is None:
         return []
     abs_scores = np.abs(np.asarray(atom_scores[: mol.GetNumAtoms()], dtype=float))
@@ -635,7 +773,10 @@ def plot_edge_panel(ax, pos, pairs, scores, labels, title):
 
 
 def molecule_graph_3d(smiles):
-    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    raw = Chem.MolFromSmiles(smiles)
+    if raw is None:
+        return None, [], []
+    mol = Chem.AddHs(raw)
     if mol is None:
         return None, [], []
     symbols = [atom.GetSymbol() for atom in mol.GetAtoms()]
@@ -722,7 +863,8 @@ def pretty_molecule_label(smiles, max_len=22):
     return short_smiles
 
 
-def set_equal_3d(ax, coords_list):
+def set_equal_3d(ax, coords_list, zoom: float = 1.0):
+    """Equal 3D axis limits around merged coordinates. ``zoom`` > 1 tightens limits (structure appears larger)."""
     all_coords = [np.asarray(coords, dtype=float) for coords in coords_list if np.asarray(coords).size > 0]
     if not all_coords:
         return
@@ -731,6 +873,8 @@ def set_equal_3d(ax, coords_list):
     maxs = merged.max(axis=0)
     center = (mins + maxs) / 2.0
     radius = max((maxs - mins).max() / 2.0, 1.0)
+    if zoom > 1.0:
+        radius = max(radius / float(zoom), 1e-6)
     ax.set_xlim(center[0] - radius, center[0] + radius)
     ax.set_ylim(center[1] - radius, center[1] + radius)
     ax.set_zlim(center[2] - radius, center[2] + radius)
@@ -1093,63 +1237,129 @@ def plot_representative_panel_nature(output_dir, sample_summaries, selected_rows
     plt.close(fig)
 
 
+# Shared figure geometry for the two 3D gallery PNGs (per-cell layout matches joint-style slots).
+GALLERY_3D_FIGSIZE_CELL = (4.5, 4.35)
+GALLERY_3D_SUBPLOT_ADJUST = dict(left=0.02, right=0.985, top=0.985, bottom=0.02, wspace=0.08, hspace=0.34)
+# Only scales the 3D view (tighter x/y/z limits); does not change slot layout or fonts.
+GALLERY_3D_MOL_ZOOM = 1.8
+
+
+def _render_3d_gallery_cell_joint_layout(
+    fig: plt.Figure,
+    nrows: int,
+    ncols: int,
+    cell_idx: int,
+    row,
+    sample_summary: dict,
+    entry: dict,
+    *,
+    extra_info_lines: tuple[str, ...] | None = None,
+) -> None:
+    """One gallery cell: title strip + middle 3D (dual mol + optional cross edges) + bottom info box."""
+    slot_ax = fig.add_subplot(nrows, ncols, cell_idx + 1)
+    slot_ax.set_axis_off()
+    bbox = slot_ax.get_position()
+    left, bottom, width, height = bbox.x0, bbox.y0, bbox.width, bbox.height
+
+    title_ax = fig.add_axes([left + 0.02 * width, bottom + 0.90 * height, 0.96 * width, 0.08 * height])
+    title_ax.set_axis_off()
+    mol_ax = fig.add_axes([left + 0.03 * width, bottom + 0.27 * height, 0.94 * width, 0.60 * height], projection="3d")
+    info_ax = fig.add_axes([left + 0.03 * width, bottom + 0.02 * height, 0.94 * width, 0.20 * height])
+    info_ax.set_axis_off()
+    ax = mol_ax
+
+    atom_scores_s = entry["atom_scores_s"]
+    atom_scores_v = entry["atom_scores_v"]
+    edge_stats = entry["edge_stats"]
+
+    _mol_s, symbols_s, bonds_s = molecule_graph_3d(row["Solvent_SMILES"])
+    _mol_v, symbols_v, bonds_v = molecule_graph_3d(row["Solute_SMILES"])
+    coords_s = np.asarray(entry["coords_s"], dtype=float)
+    coords_v = np.asarray(entry["coords_v"], dtype=float)
+
+    draw_molecule_3d(
+        ax,
+        coords_s,
+        symbols_s,
+        bonds_s,
+        atom_scores_s,
+        edge_score_map(edge_stats["solvent_pairs"], np.abs(edge_stats["solvent_scores"])),
+        title=None,
+    )
+    draw_molecule_3d(
+        ax,
+        coords_v,
+        symbols_v,
+        bonds_v,
+        atom_scores_v,
+        edge_score_map(edge_stats["solute_pairs"], np.abs(edge_stats["solute_scores"])),
+        title=None,
+    )
+
+    cross_pairs = edge_stats.get("cross_pairs", [])
+    cross_scores = np.asarray(edge_stats.get("cross_scores", []), dtype=float)
+    if len(cross_pairs) > 0:
+        norm_cross = normalize_scores(cross_scores)
+        for (src, dst), scaled in zip(cross_pairs, norm_cross):
+            if src >= len(coords_s) or dst >= len(coords_v):
+                continue
+            ax.plot(
+                [coords_s[src, 0], coords_v[dst, 0]],
+                [coords_s[src, 1], coords_v[dst, 1]],
+                [coords_s[src, 2], coords_v[dst, 2]],
+                color=plt.get_cmap("viridis")(0.35 + 0.55 * abs(float(scaled))),
+                linewidth=0.4 + 1.6 * abs(float(scaled)),
+                alpha=0.24 + 0.25 * abs(float(scaled)),
+            )
+
+    set_equal_3d(ax, [coords_s, coords_v], zoom=GALLERY_3D_MOL_ZOOM)
+
+    title_line = f"#{sample_summary['sample_index']}  |  T={float(row['T']) + 273.15:.2f} K"
+    title_ax.text(0.5, 0.5, title_line, ha="center", va="center", fontsize=15)
+    lines = [
+        f"True: {sample_summary['true_log_gamma']:.3f}",
+        f"Pred: {sample_summary['pred_log_gamma']:.3f}",
+        f"Solute: {pretty_molecule_label(row['Solute_SMILES'], 18)}",
+        f"Solvent: {pretty_molecule_label(row['Solvent_SMILES'], 18)}",
+    ]
+    if extra_info_lines:
+        lines.extend(extra_info_lines)
+    info_text = "\n".join(lines)
+    info_ax.text(
+        0.02,
+        0.95,
+        info_text,
+        fontsize=12,
+        va="top",
+        ha="left",
+        bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor="#d9e1e6", linewidth=0.7, alpha=0.96),
+    )
+
+
 def plot_3d_gallery(output_dir, sample_summaries, selected_rows, gallery_entries, nrows=8, ncols=6):
     if not sample_summaries:
         return
     total = min(len(sample_summaries), nrows * ncols)
-    fig = plt.figure(figsize=(3.6 * ncols, 3.2 * nrows))
+    cw, ch = GALLERY_3D_FIGSIZE_CELL
+    fig = plt.figure(figsize=(cw * ncols, ch * nrows))
     for idx, (sample_summary, (_, row), entry) in enumerate(zip(sample_summaries[:total], selected_rows.iterrows(), gallery_entries[:total])):
-        ax = fig.add_subplot(nrows, ncols, idx + 1, projection="3d")
-        atom_scores_s = entry["atom_scores_s"]
-        atom_scores_v = entry["atom_scores_v"]
-        edge_stats = entry["edge_stats"]
-
-        mol_s, symbols_s, bonds_s = molecule_graph_3d(row["Solvent_SMILES"])
-        mol_v, symbols_v, bonds_v = molecule_graph_3d(row["Solute_SMILES"])
-        coords_s = entry["coords_s"]
-        coords_v = entry["coords_v"]
-
-        if coords_s.size > 0:
-            coords_s = coords_s - coords_s.mean(axis=0, keepdims=True)
-            coords_s[:, 0] -= 2.4
-        if coords_v.size > 0:
-            coords_v = coords_v - coords_v.mean(axis=0, keepdims=True)
-            coords_v[:, 0] += 2.4
-
-        draw_molecule_3d(
-            ax,
-            coords_s,
-            symbols_s,
-            bonds_s,
-            atom_scores_s,
-            edge_score_map(edge_stats["solvent_pairs"], np.abs(edge_stats["solvent_scores"])),
-            title=None,
+        extras: list[str] = [f"|AE|: {sample_summary['abs_error']:.3f}"]
+        fg_bits: list[str] = []
+        if entry.get("solute_fg"):
+            fg_bits.append(f"Solu: {entry['solute_fg'][0]['group']}")
+        if entry.get("solvent_fg"):
+            fg_bits.append(f"Solv: {entry['solvent_fg'][0]['group']}")
+        if fg_bits:
+            extras.append("FG: " + " | ".join(fg_bits))
+        _render_3d_gallery_cell_joint_layout(
+            fig, nrows, ncols, idx, row, sample_summary, entry, extra_info_lines=tuple(extras)
         )
-        draw_molecule_3d(
-            ax,
-            coords_v,
-            symbols_v,
-            bonds_v,
-            atom_scores_v,
-            edge_score_map(edge_stats["solute_pairs"], np.abs(edge_stats["solute_scores"])),
-            title=None,
-        )
-        set_equal_3d(ax, [coords_s, coords_v])
-        ax.set_title(f"#{sample_summary['sample_index']}  |AE|={sample_summary['abs_error']:.3f}", pad=3, fontsize=27)
-
-        fg_text = []
-        if entry["solute_fg"]:
-            fg_text.append(f"Solu: {entry['solute_fg'][0]['group']}")
-        if entry["solvent_fg"]:
-            fg_text.append(f"Solv: {entry['solvent_fg'][0]['group']}")
-        if fg_text:
-            ax.text2D(0.03, 0.04, " | ".join(fg_text), transform=ax.transAxes, fontsize=24)
 
     total_slots = nrows * ncols
     for empty_idx in range(total, total_slots):
         ax = fig.add_subplot(nrows, ncols, empty_idx + 1)
         ax.set_axis_off()
-    fig.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02, wspace=0.08, hspace=0.10)
+    fig.subplots_adjust(**GALLERY_3D_SUBPLOT_ADJUST)
     fig.savefig(Path(output_dir) / "representative_molecule_panel_3d_8x6.png", bbox_inches="tight")
     plt.close(fig)
 
@@ -1158,91 +1368,16 @@ def plot_3d_gallery_joint(output_dir, sample_summaries, selected_rows, gallery_e
     if not sample_summaries:
         return
     total = min(len(sample_summaries), nrows * ncols)
-    fig = plt.figure(figsize=(4.5 * ncols, 4.35 * nrows))
+    cw, ch = GALLERY_3D_FIGSIZE_CELL
+    fig = plt.figure(figsize=(cw * ncols, ch * nrows))
     for idx, (sample_summary, (_, row), entry) in enumerate(zip(sample_summaries[:total], selected_rows.iterrows(), gallery_entries[:total])):
-        slot_ax = fig.add_subplot(nrows, ncols, idx + 1)
-        slot_ax.set_axis_off()
-        bbox = slot_ax.get_position()
-        left, bottom, width, height = bbox.x0, bbox.y0, bbox.width, bbox.height
-
-        title_ax = fig.add_axes([left + 0.02 * width, bottom + 0.90 * height, 0.96 * width, 0.08 * height])
-        title_ax.set_axis_off()
-        mol_ax = fig.add_axes([left + 0.03 * width, bottom + 0.27 * height, 0.94 * width, 0.60 * height], projection="3d")
-        info_ax = fig.add_axes([left + 0.03 * width, bottom + 0.02 * height, 0.94 * width, 0.20 * height])
-        info_ax.set_axis_off()
-        ax = mol_ax
-        atom_scores_s = entry["atom_scores_s"]
-        atom_scores_v = entry["atom_scores_v"]
-        edge_stats = entry["edge_stats"]
-
-        mol_s, symbols_s, bonds_s = molecule_graph_3d(row["Solvent_SMILES"])
-        mol_v, symbols_v, bonds_v = molecule_graph_3d(row["Solute_SMILES"])
-        coords_s = np.asarray(entry["coords_s"], dtype=float)
-        coords_v = np.asarray(entry["coords_v"], dtype=float)
-
-        draw_molecule_3d(
-            ax,
-            coords_s,
-            symbols_s,
-            bonds_s,
-            atom_scores_s,
-            edge_score_map(edge_stats["solvent_pairs"], np.abs(edge_stats["solvent_scores"])),
-            title=None,
-        )
-        draw_molecule_3d(
-            ax,
-            coords_v,
-            symbols_v,
-            bonds_v,
-            atom_scores_v,
-            edge_score_map(edge_stats["solute_pairs"], np.abs(edge_stats["solute_scores"])),
-            title=None,
-        )
-
-        # Draw cross-molecular interactions in the original joint 3D space.
-        cross_pairs = edge_stats.get("cross_pairs", [])
-        cross_scores = np.asarray(edge_stats.get("cross_scores", []), dtype=float)
-        if len(cross_pairs) > 0:
-            norm_cross = normalize_scores(cross_scores)
-            for (src, dst), scaled in zip(cross_pairs, norm_cross):
-                if src >= len(coords_s) or dst >= len(coords_v):
-                    continue
-                ax.plot(
-                    [coords_s[src, 0], coords_v[dst, 0]],
-                    [coords_s[src, 1], coords_v[dst, 1]],
-                    [coords_s[src, 2], coords_v[dst, 2]],
-                    color=plt.get_cmap("viridis")(0.35 + 0.55 * abs(float(scaled))),
-                    linewidth=0.4 + 1.6 * abs(float(scaled)),
-                    alpha=0.24 + 0.25 * abs(float(scaled)),
-                )
-
-        set_equal_3d(ax, [coords_s, coords_v])
-
-        title_line = f"#{sample_summary['sample_index']}  |  T={float(row['T']) + 273.15:.2f} K"
-        title_ax.text(0.5, 0.5, title_line, ha="center", va="center", fontsize=15)
-        info_text = "\n".join(
-            [
-                f"True: {sample_summary['true_log_gamma']:.3f}",
-                f"Pred: {sample_summary['pred_log_gamma']:.3f}",
-                f"Solute: {pretty_molecule_label(row['Solute_SMILES'], 18)}",
-                f"Solvent: {pretty_molecule_label(row['Solvent_SMILES'], 18)}",
-            ]
-        )
-        info_ax.text(
-            0.02,
-            0.95,
-            info_text,
-            fontsize=12,
-            va="top",
-            ha="left",
-            bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor="#d9e1e6", linewidth=0.7, alpha=0.96),
-        )
+        _render_3d_gallery_cell_joint_layout(fig, nrows, ncols, idx, row, sample_summary, entry, extra_info_lines=None)
 
     total_slots = nrows * ncols
     for empty_idx in range(total, total_slots):
         ax = fig.add_subplot(nrows, ncols, empty_idx + 1)
         ax.set_axis_off()
-    fig.subplots_adjust(left=0.02, right=0.985, top=0.985, bottom=0.02, wspace=0.08, hspace=0.34)
+    fig.subplots_adjust(**GALLERY_3D_SUBPLOT_ADJUST)
     fig.savefig(Path(output_dir) / "representative_molecule_panel_3d_joint_8x6.png", bbox_inches="tight")
     plt.close(fig)
 
@@ -1250,6 +1385,7 @@ def plot_3d_gallery_joint(output_dir, sample_summaries, selected_rows, gallery_e
 def choose_samples(df, predictions_df, selection, num_samples, exclude_small_solvents=True):
     merged = df.copy()
     if predictions_df is not None and "pred_log-gamma" in predictions_df.columns:
+        _assert_prediction_rows_aligned(df, predictions_df)
         pred_cols = [col for col in predictions_df.columns if col in {"pred_log-gamma", "abs_error"}]
         merged = merged.join(predictions_df[pred_cols], how="left")
         if "abs_error" not in merged.columns and "pred_log-gamma" in merged.columns and "log-gamma" in merged.columns:
@@ -1291,11 +1427,13 @@ def save_global_summary(output_dir, sample_summaries, atom_df, edge_df, graph_df
 
 def main():
     args = parse_args()
+    apply_pgssi_model_flags(args)
     ensure_dir(args.output_dir)
     ensure_dir(args.cache_dir)
 
     df = pd.read_csv(args.data_path)
-    predictions_df = pd.read_csv(args.predictions_path) if Path(args.predictions_path).exists() else None
+    pred_path = Path(args.predictions_path)
+    predictions_df = pd.read_csv(pred_path) if pred_path.exists() else None
     selected = choose_samples(df, predictions_df, args.selection, args.num_samples, args.exclude_small_solvents)
 
     model, device = load_model(args)
@@ -1352,6 +1490,28 @@ def main():
     plot_representative_panel_nature(args.output_dir, sample_summaries, selected, atom_score_pairs)
     plot_3d_gallery(args.output_dir, sample_summaries, selected, gallery_entries, nrows=args.grid_rows, ncols=args.grid_cols)
     plot_3d_gallery_joint(args.output_dir, sample_summaries, selected, gallery_entries, nrows=args.grid_rows, ncols=args.grid_cols)
+
+    run_meta = {
+        "model_path": args.model_path,
+        "data_path": args.data_path,
+        "predictions_path": args.predictions_path,
+        "train_summary_json": str(_resolve_repo_path(args.train_summary_json)),
+        "model_flags": {
+            "hidden_dim": args.hidden_dim,
+            "num_intra_layers": args.num_intra_layers,
+            "enable_cross_interaction": args.enable_cross_interaction,
+            "use_interaction_types": args.use_interaction_types,
+            "use_moe": args.use_moe,
+            "use_physics_prior": args.use_physics_prior,
+            "disable_cross_refine": args.disable_cross_refine,
+            "topology_only": args.topology_only,
+            "direct_loggamma_head": args.direct_loggamma_head,
+            "disable_formula_layer": args.disable_formula_layer,
+        },
+    }
+    meta_path = Path(args.output_dir) / "interpretability_run_config.json"
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(run_meta, fh, indent=2, ensure_ascii=False)
 
     print(f"Interpretability analysis completed. Outputs: {Path(args.output_dir).resolve()}")
 

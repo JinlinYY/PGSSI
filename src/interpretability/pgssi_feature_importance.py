@@ -1,9 +1,16 @@
+"""PGSSI 特征重要性（遮挡 / saliency / grad*input）。
+
+默认与 ``runs/pgssi_train`` 下 molecule_train 系列权重及 summary 对齐；``--train-summary-json``
+用于自动恢复训练时架构开关。Occlusion 对离散特征置 0 表示「某一取值」而非因果移除，解读时宜保守。
+"""
+
 from __future__ import annotations
 
 import argparse
 import copy
 import json
 import sys
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -49,13 +56,13 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="runs/pgssi_train_all_e3typed_edgeattr_refit_v3_attnres/all_merged_train_PGSSI_E3Typed_best.pth",
+        default="runs/pgssi_train/molecule_train_PGSSI_best.pth",
     )
     parser.add_argument("--data-path", type=str, default="dataset/all/all_merged_test.csv")
     parser.add_argument(
         "--predictions-path",
         type=str,
-        default="runs/pgssi_train_all_e3typed_edgeattr_refit_v3_attnres/all_merged_train_PGSSI_E3Typed_all_merged_test_predictions.csv",
+        default="runs/pgssi_train/molecule_train_PGSSI_all_merged_test_predictions.csv",
     )
     parser.add_argument("--output-dir", type=str, default="src/interpretability/outputs/final_model/feature_importance_experiment")
     parser.add_argument("--cache-dir", type=str, default="cache/interpretability_feature_experiment")
@@ -75,12 +82,78 @@ def parse_args():
     parser.add_argument("--method", type=str, default="occlusion", choices=["saliency", "grad_input", "occlusion"])
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--hidden-dim", type=int, default=512)
-    parser.add_argument("--num-intra-layers", type=int, default=2)
+    parser.add_argument(
+        "--num-intra-layers",
+        type=int,
+        default=None,
+        help="分子内 EGNN 层数；默认从 --train-summary-json 读取，否则为 2。",
+    )
     parser.add_argument("--use-interaction-types", action="store_true", default=True)
     parser.add_argument("--disable-interaction-types", dest="use_interaction_types", action="store_false")
     parser.add_argument("--use-moe", action="store_true", default=True)
     parser.add_argument("--disable-moe", dest="use_moe", action="store_false")
+    parser.add_argument(
+        "--train-summary-json",
+        type=str,
+        default=str(REPO_ROOT / "runs" / "pgssi_train" / "molecule_train_PGSSI_summary.json"),
+        help="若存在则读取其中的架构开关（与训练时一致）；CLI 的 --disable-* 仍优先生效。",
+    )
+    parser.add_argument("--disable-cross-interaction", action="store_true")
+    parser.add_argument("--disable-physics-prior", action="store_true")
+    parser.add_argument("--disable-cross-refine", action="store_true")
+    parser.add_argument("--topology-only", action="store_true")
+    parser.add_argument("--direct-loggamma-head", action="store_true")
+    parser.add_argument("--disable-formula-layer", action="store_true")
     return parser.parse_args()
+
+
+def _resolve_repo_path(path_str: str | Path) -> Path:
+    p = Path(path_str)
+    return p if p.is_absolute() else (REPO_ROOT / p)
+
+
+def apply_pgssi_model_flags(args: argparse.Namespace) -> None:
+    """将路径解析为绝对路径，并从训练 summary 合并与 PGSSI_train 一致的架构开关。"""
+    args.model_path = str(_resolve_repo_path(args.model_path))
+    args.data_path = str(_resolve_repo_path(args.data_path))
+    args.predictions_path = str(_resolve_repo_path(args.predictions_path))
+
+    summary_path = _resolve_repo_path(args.train_summary_json)
+    flags: dict = {}
+    if summary_path.exists():
+        try:
+            with open(summary_path, encoding="utf-8") as fh:
+                flags = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            flags = {}
+
+    saved_use_interaction_types = bool(args.use_interaction_types)
+    saved_use_moe = bool(args.use_moe)
+
+    if args.num_intra_layers is None:
+        args.num_intra_layers = int(flags.get("num_intra_layers", 2))
+    else:
+        args.num_intra_layers = int(args.num_intra_layers)
+
+    args.enable_cross_interaction = bool(flags.get("enable_cross_interaction", True))
+    if getattr(args, "disable_cross_interaction", False):
+        args.enable_cross_interaction = False
+
+    if "use_interaction_types" in flags:
+        args.use_interaction_types = bool(flags["use_interaction_types"])
+    if not saved_use_interaction_types:
+        args.use_interaction_types = False
+
+    if "use_moe" in flags:
+        args.use_moe = bool(flags["use_moe"])
+    if not saved_use_moe:
+        args.use_moe = False
+
+    args.use_physics_prior = not bool(getattr(args, "disable_physics_prior", False))
+    args.disable_cross_refine = bool(getattr(args, "disable_cross_refine", False))
+    args.topology_only = bool(getattr(args, "topology_only", False))
+    args.direct_loggamma_head = bool(getattr(args, "direct_loggamma_head", False))
+    args.disable_formula_layer = bool(getattr(args, "disable_formula_layer", False))
 
 
 def atom_feature_names_38() -> list[str]:
@@ -323,6 +396,7 @@ def saliency_feature_importance(model, data, device, use_grad_times_input: bool)
 
     interaction_scores = []
     activation_scores = interaction_activation_scores(physics_aux)
+    used_activation_fallback = False
     for idx, (_, aux_keys) in enumerate(interaction_feature_key_groups()):
         grad_values = []
         for aux_key in aux_keys:
@@ -334,7 +408,16 @@ def saliency_feature_importance(model, data, device, use_grad_times_input: bool)
         if grad_values and any(value > 0.0 for value in grad_values):
             interaction_scores.append(float(np.mean(grad_values)))
         else:
+            used_activation_fallback = True
             interaction_scores.append(float(activation_scores[idx]) if idx < len(activation_scores) else 0.0)
+
+    if used_activation_fallback:
+        warnings.warn(
+            "Saliency/grad_input：部分跨分子通道未收到 physics_aux 的梯度，已退化为用激活强度代替；"
+            "交互项排名仅作启发式参考，建议与 occlusion 对照。",
+            UserWarning,
+            stacklevel=2,
+        )
 
     return {
         "atom_solvent": atom_scores_solvent,
@@ -352,6 +435,33 @@ def load_analysis_frame(data_path: str, predictions_path: str) -> pd.DataFrame:
     pred_df = pd.read_csv(predictions_path)
     if len(data_df) != len(pred_df):
         raise ValueError("Prediction file length does not match data file length.")
+    key_cols = [c for c in ("Solvent_SMILES", "Solute_SMILES", "T") if c in data_df.columns and c in pred_df.columns]
+    if len(key_cols) >= 2:
+        left = data_df[key_cols].reset_index(drop=True).copy()
+        right = pred_df[key_cols].reset_index(drop=True).copy()
+        if "T" in key_cols:
+            left["T"] = pd.to_numeric(left["T"], errors="coerce")
+            right["T"] = pd.to_numeric(right["T"], errors="coerce")
+        for col in key_cols:
+            if col != "T" and str(left[col].dtype) == "object":
+                left[col] = left[col].astype(str)
+                right[col] = right[col].astype(str)
+        aligned = True
+        for col in key_cols:
+            if col == "T":
+                la = left[col].to_numpy(dtype=float)
+                ra = right[col].to_numpy(dtype=float)
+                if la.shape != ra.shape or not np.allclose(la, ra, rtol=0.0, atol=1e-5, equal_nan=True):
+                    aligned = False
+                    break
+            elif not left[col].equals(right[col]):
+                aligned = False
+                break
+        if not aligned:
+            raise ValueError(
+                "data-path 与 predictions-path 按行不对齐（已比对列 "
+                f"{key_cols}）。请保证两表行序一致，或先在相同键上 join 后再导出预测。"
+            )
     merged = pred_df.copy()
     if "abs_error" not in merged.columns and {"log-gamma", "pred_log-gamma"}.issubset(merged.columns):
         merged["abs_error"] = np.abs(merged["log-gamma"] - merged["pred_log-gamma"])
@@ -688,6 +798,7 @@ def plot_interaction_grouped_importance(interaction_df: pd.DataFrame, out_path: 
 
 def main():
     args = parse_args()
+    apply_pgssi_model_flags(args)
     ensure_dir(args.output_dir)
     ensure_dir(args.cache_dir)
 
@@ -776,12 +887,15 @@ def main():
     interaction_group_rows = []
     for group_name, feature_names in interaction_feature_display_groups():
         group_frame = interaction_rank_df[interaction_rank_df["Feature"].isin(feature_names)].copy()
-        group_mean = float(group_frame["Interaction MeanAbsImportance"].sum()) if not group_frame.empty else 0.0
+        imp = group_frame["Interaction MeanAbsImportance"] if not group_frame.empty else pd.Series(dtype=float)
+        group_mean_abs = float(imp.mean()) if len(imp) else 0.0
+        group_sum_abs = float(imp.sum()) if len(imp) else 0.0
         interaction_group_rows.append(
             {
                 "Group": group_name,
                 "NumFeatures": int(len(group_frame)),
-                "GroupMeanAbsImportance": group_mean,
+                "GroupMeanAbsImportance": group_mean_abs,
+                "GroupSumAbsImportance": group_sum_abs,
                 "Features": ", ".join(group_frame.sort_values("Interaction Rank")["Feature"].tolist()),
             }
         )
@@ -796,12 +910,31 @@ def main():
         "num_samples": len(sample_indices),
         "selection": args.selection,
         "method": args.method,
+        "model_path": args.model_path,
+        "train_summary_json": str(_resolve_repo_path(args.train_summary_json)),
+        "model_flags": {
+            "hidden_dim": args.hidden_dim,
+            "num_intra_layers": args.num_intra_layers,
+            "enable_cross_interaction": args.enable_cross_interaction,
+            "use_interaction_types": args.use_interaction_types,
+            "use_moe": args.use_moe,
+            "use_physics_prior": args.use_physics_prior,
+            "disable_cross_refine": args.disable_cross_refine,
+            "topology_only": args.topology_only,
+            "direct_loggamma_head": args.direct_loggamma_head,
+            "disable_formula_layer": args.disable_formula_layer,
+        },
         "sample_indices": [int(idx) for idx in sample_indices],
         "atom_features_shown": atom_display["Feature"].tolist() if not atom_display.empty else [],
         "bond_features_shown": bond_display["Feature"].tolist() if not bond_display.empty else [],
         "global_features_shown": global_display["Feature"].tolist() if not global_display.empty else [],
         "interaction_features_shown": interaction_display["Feature"].tolist() if not interaction_display.empty else [],
         "interaction_feature_groups": {group_name: feature_names for group_name, feature_names in interaction_feature_display_groups()},
+        "notes": (
+            "Saliency/grad_input 下若 physics_aux 无梯度，交互通道会退化为激活强度（见运行时的 UserWarning）。"
+            "interaction_grouped_importance.csv 中 GroupMeanAbsImportance 为组内特征重要性的算术平均，"
+            "GroupSumAbsImportance 为组内求和。"
+        ),
     }
     with open(out_dir / "feature_importance_summary.json", "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2, ensure_ascii=False)
