@@ -26,7 +26,7 @@ PGSSI-github/
 |   |-- dataset_split/               # Pair-grouped dataset splitting
 |   |-- result_plot/                 # Plotting utilities
 |   `-- continuous interpolation and extrapolation/
-|-- cache/                           # Generated geometry caches, ignored by git
+|-- cache/                           # Generated geometry caches
 `-- README.md
 ```
 
