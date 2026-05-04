@@ -6,7 +6,7 @@ This repository contains the code and datasets used in the manuscript:
 
 > **Physics-Guided 3D Solute-Solvent Interaction Framework for Infinite-Dilution Activity Coefficient Prediction**.
 
-PGSSI predicts temperature-dependent infinite-dilution activity coefficients, `log-gamma`, from solute SMILES, solvent SMILES, and temperature. The model builds a joint 3D solute-solvent representation with explicit intermolecular contact edges, learns intramolecular and cross-molecular interactions, and maps the learned representation to a thermodynamically structured inverse-temperature response.
+PGSSI predicts temperature-dependent infinite-dilution activity coefficients, from solute SMILES, solvent SMILES, and temperature. The model builds a joint 3D solute-solvent representation with explicit intermolecular contact edges, learns intramolecular and cross-molecular interactions, and maps the learned representation to a thermodynamically structured inverse-temperature response.
 
 
 ![image](https://github.com/JinlinYY/PGSSI/blob/main/method.png).
