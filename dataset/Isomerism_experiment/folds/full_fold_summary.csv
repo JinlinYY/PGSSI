@@ -1,0 +1,16 @@
+dataset,fold,split,path,samples,unique_pairs,unique_solute,unique_solvent,log_gamma_mean,log_gamma_std
+full,1,train,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold01_train.csv,27541,9254,504,668,1.2938415044685738,1.8414090625336468
+full,1,valid,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold01_valid.csv,4096,1323,285,471,1.2488377657409668,1.5309982301740321
+full,1,test,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold01_test.csv,8203,2645,336,569,1.2528552966179447,1.7262959948615122
+full,2,train,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold02_train.csv,28118,9254,509,667,1.260614510508251,1.7666092840612
+full,2,valid,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold02_valid.csv,3937,1323,277,478,1.258323976437135,1.6889261642787248
+full,2,test,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold02_test.csv,7785,2645,356,571,1.3649479845211303,1.909819163137081
+full,3,train,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold03_train.csv,28082,9255,515,680,1.3187831585248557,1.8163014883338309
+full,3,valid,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold03_valid.csv,3852,1323,266,469,1.181749474504154,1.707447728169169
+full,3,test,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold03_test.csv,7906,2644,339,564,1.1940213417298253,1.721815448748533
+full,4,train,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold04_train.csv,27754,9255,517,676,1.261937861877603,1.780371013364677
+full,4,valid,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold04_valid.csv,4126,1323,264,467,1.3401470066185166,1.6752511654688955
+full,4,test,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold04_test.csv,7960,2644,353,569,1.3156822102188441,1.8708799155213593
+full,5,train,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold05_train.csv,27824,9255,504,679,1.2610052848086186,1.7899850284856904
+full,5,valid,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold05_valid.csv,4030,1323,255,461,1.4217975519099253,1.931276151968136
+full,5,test,/root/rivermind-data/PGSSI-main/src/1.Isomerism_experiment/folds/full_fold05_test.csv,7986,2644,369,568,1.2784930105796395,1.703544372270491

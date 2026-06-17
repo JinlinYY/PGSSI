@@ -1,0 +1,16 @@
+dataset,fold,split,path,samples,unique_pairs,unique_solute,unique_solvent,log_gamma_mean,log_gamma_std
+interaction_type,1,train,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold01_train.csv,27547,9254,507,672,1.2899631607156858,1.8105929996303172
+interaction_type,1,valid,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold01_valid.csv,4090,1323,272,480,1.2748931967748167,1.7612411325217598
+interaction_type,1,test,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold01_test.csv,8203,2645,336,569,1.2528552966179447,1.7262959948615122
+interaction_type,2,train,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold02_train.csv,28269,9254,508,669,1.2673492253718914,1.7652155405157774
+interaction_type,2,valid,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold02_valid.csv,3786,1323,269,467,1.2079463945235076,1.6957042165315788
+interaction_type,2,test,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold02_test.csv,7785,2645,356,571,1.3649479845211303,1.909819163137081
+interaction_type,3,train,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold03_train.csv,27943,9255,522,683,1.2995149641226782,1.8083399109118907
+interaction_type,3,valid,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold03_valid.csv,3991,1323,263,481,1.321428461790278,1.7737821792732438
+interaction_type,3,test,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold03_test.csv,7906,2644,339,564,1.1940213417298253,1.721815448748533
+interaction_type,4,train,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold04_train.csv,27905,9255,502,677,1.2819974557200142,1.7771091437798696
+interaction_type,4,valid,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold04_valid.csv,3975,1323,290,478,1.2022970983627674,1.6953160052883018
+interaction_type,4,test,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold04_test.csv,7960,2644,353,569,1.3156822102188441,1.8708799155213593
+interaction_type,5,train,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold05_train.csv,27858,9255,506,678,1.274842840129155,1.7977706274829994
+interaction_type,5,valid,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold05_valid.csv,3996,1323,258,479,1.3266975321306307,1.8867941229595113
+interaction_type,5,test,E:\PGSSI\PGSSI-main\src\3.Interaction_type_ablation\folds\interaction_type_fold05_test.csv,7986,2644,369,568,1.2784930105796395,1.703544372270491

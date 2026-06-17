@@ -1,0 +1,13 @@
+section,metric,value,percentage
+overall,total_samples,39840,100.0
+overall,unique_solute,559,
+overall,unique_solvent,695,
+isomer_subset,isomer_samples,1039,2.6079317269076303
+isomer_subset,unique_isomer_solute,93,
+isomer_subset,unique_isomer_solvent,106,
+isomer_subset,unique_isomer_pairs,345,
+rdkit,unique_valid_molecules,1254,100.0
+rdkit,unique_rdkit_isomeric_molecules,18,1.4354066985645932
+heuristic,unique_heuristic_isomeric_molecules,18,1.4354066985645932
+collision,component_collision_groups,13,
+collision,pair_collision_groups,153,
