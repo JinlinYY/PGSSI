@@ -173,3 +173,44 @@ python src/result_plot/plot_pgssi_results.py \
 
 Interpretability and feature-importance scripts are located in `src/interpretability/`. These scripts expect a trained PGSSI checkpoint and a compatible test CSV.
 
+### Five-Fold PGSSI Ablation Study
+
+Run the five-fold cross-validation experiment for the PGSSI ablation variants:
+
+```bash
+python src/pgssi_ablation_5fold_cv/pgssi_ablation_5fold_cv.py \
+  --input-path dataset/all/all_merged.csv \
+  --existing-split-dir dataset/pgssi_ablation_5fold_cv_splits \
+  --output-dir runs/pgssi_ablation_5fold_cv \
+  --cache-dir cache/pgssi_ablation_5fold_cv \
+  --n-folds 5 \
+  --seed 42
+```
+
+### Readout-Reference Ablation
+
+Run the readout-level reference-information ablation using the fixed dataset split:
+
+```bash
+python src/readout_reference_ablation/readout_reference_ablation.py \
+  --train-path dataset/readout_reference_ablation_fixed_split/all_merged_train.csv \
+  --valid-path dataset/readout_reference_ablation_fixed_split/all_merged_valid.csv \
+  --test-path dataset/readout_reference_ablation_fixed_split/all_merged_test.csv \
+  --output-dir runs/readout_reference_ablation \
+  --cache-dir cache/readout_reference_ablation \
+  --seed 42
+```
+
+### Water/Non-Water Five-Fold Evaluation
+
+Run the five-fold evaluation for water-containing and non-aqueous systems:
+
+```bash
+python src/water_nonwater_5fold_cv/water_nonwater_5fold_cv.py \
+  --input-path dataset/all/all_merged.csv \
+  --output-dir runs/water_nonwater_5fold_cv \
+  --cache-dir cache/water_nonwater_5fold_cv \
+  --n-folds 5 \
+  --seed 42
+```
+
