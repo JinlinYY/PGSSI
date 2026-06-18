@@ -57,7 +57,7 @@ Included datasets:
 | Wu et al. train/valid/test | `dataset/wu_et_al/` | 21,284 total |
 | IDAC2026 external data | `dataset/wang_et_al/IDAC_2026_dataset.csv` | 18,556 |
 
-### Experiment-Specific Data Splits
+ Experiment-Specific Data Splits
 
 | Experiment | Directory | Description |
 | --- | --- | --- |
@@ -173,7 +173,7 @@ python src/result_plot/plot_pgssi_results.py \
 
 Interpretability and feature-importance scripts are located in `src/interpretability/`. These scripts expect a trained PGSSI checkpoint and a compatible test CSV.
 
-### Five-Fold PGSSI Ablation Study
+Five-Fold PGSSI Ablation Study
 
 Run the five-fold cross-validation experiment for the PGSSI ablation variants:
 
@@ -187,7 +187,7 @@ python src/pgssi_ablation_5fold_cv/pgssi_ablation_5fold_cv.py \
   --seed 42
 ```
 
-### Readout-Reference Ablation
+Readout-Reference Ablation
 
 Run the readout-level reference-information ablation using the fixed dataset split:
 
@@ -201,7 +201,7 @@ python src/readout_reference_ablation/readout_reference_ablation.py \
   --seed 42
 ```
 
-### Water/Non-Water Five-Fold Evaluation
+Water/Non-Water Five-Fold Evaluation
 
 Run the five-fold evaluation for water-containing and non-aqueous systems:
 
