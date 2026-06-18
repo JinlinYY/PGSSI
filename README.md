@@ -29,6 +29,9 @@ PGSSI-github/
 |   |-- interpretability/            # PGSSI interpretation and feature importance analysis
 |   |-- dataset_split/               # Pair-grouped dataset splitting
 |   |-- result_plot/                 # Plotting utilities
+|   |-- pgssi_ablation_5fold_cv/                  # Five-fold PGSSI ablation experiment
+|   |-- readout_reference_ablation/               # Readout-reference ablation experiment
+|   |-- water_nonwater_5fold_cv/                  # Water/non-water five-fold evaluation
 |   `-- continuous interpolation and extrapolation/
 |-- cache/                           # Generated geometry caches
 `-- README.md
