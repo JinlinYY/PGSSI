@@ -17,7 +17,10 @@ PGSSI-github/
 |-- dataset/
 |   |-- all/                         # Full merged dataset and train/valid/test splits
 |   |-- wu_et_al/                    # Wu et al. benchmark split
-|   `-- wang_et_al/                  # IDAC2026 external test data
+|   |-- wang_et_al/                  # IDAC2026 external test data
+|   |-- pgssi_ablation_5fold_cv_splits/           # Five-fold splits for the PGSSI ablation study
+|   |-- readout_reference_ablation_fixed_split/   # Fixed split for the readout-reference ablation
+|   `-- water_nonwater_5fold-cv/                  # Five-fold splits for water/non-water evaluation
 |-- src/
 |   |-- models/PGSSI/                # Model architecture, data processing, training, physics loss
 |   |-- benchmark/                   # Wu2004 / IDAC2026 benchmark script
