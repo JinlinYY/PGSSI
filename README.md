@@ -57,6 +57,16 @@ Included datasets:
 | Wu et al. train/valid/test | `dataset/wu_et_al/` | 21,284 total |
 | IDAC2026 external data | `dataset/wang_et_al/IDAC_2026_dataset.csv` | 18,556 |
 
+### Experiment-Specific Data Splits
+
+| Experiment | Directory | Description |
+| --- | --- | --- |
+| Water/non-water evaluation | `dataset/water_nonwater_5fold-cv/` | Five pair-grouped folds for evaluating water-containing and non-aqueous systems |
+| PGSSI ablation study | `dataset/pgssi_ablation_5fold_cv_splits/` | Five pair-grouped folds used for the PGSSI ablation experiments |
+| Readout-reference ablation | `dataset/readout_reference_ablation_fixed_split/` | Fixed training, validation, and test splits used for the readout-level ablation |
+
+Each five-fold dataset contains training, validation, and test CSV files for folds 1–5. The splits are grouped by solvent-solute pair to prevent pair leakage between subsets.
+
 ## Environment
 
 The project requires PyTorch, PyTorch Geometric, RDKit, and common scientific Python packages. Because PyTorch/PyG installation depends on your CUDA version, install those packages using the commands recommended for your platform.
