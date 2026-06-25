@@ -11,17 +11,6 @@ PGSSI predicts temperature-dependent infinite-dilution activity coefficients, fr
 
 ![PGSSI framework](https://github.com/JinlinYY/PGSSI/blob/main/method.png)
 
-## Revision Experiments
-
-The repository includes the additional analyses conducted during manuscript revision:
-
-| Experiment                                            | Script                                                       | Main outputs                                                 |
-| ----------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Dataset composition and quality analysis              | `src/dataset_analysis/analyze_dataset_composition.py`        | Dataset figures, summary tables, and duplicate/conflict records |
-| Isomerism subset and pair-grouped 5-fold CV           | `src/Isomerism_experiment/run_isomerism_cv.py`               | Subset analysis, fold files, Full PGSSI and topology-only results |
-| Interaction-type ablation with pair-grouped 5-fold CV | `src/Interaction_type_ablation/run_interaction_type_ablation.py` | Per-fold and mean +/- std results for six interaction masks  |
-
-All reported MAE, RMSE, and R2 values are calculated on `log-gamma`.
 
 ## Repository Structure
 
