@@ -9,29 +9,41 @@ This repository contains the code and datasets used in the manuscript:
 PGSSI predicts temperature-dependent infinite-dilution activity coefficients, from solute SMILES, solvent SMILES, and temperature. The model builds a joint 3D solute-solvent representation with explicit intermolecular contact edges, learns intramolecular and cross-molecular interactions, and maps the learned representation to a thermodynamically structured inverse-temperature response.
 
 
-![image](https://github.com/JinlinYY/PGSSI/blob/main/method.png).
+![PGSSI framework](https://github.com/JinlinYY/PGSSI/blob/main/method.png)
+
+## Revision Experiments
+
+The repository includes the additional analyses conducted during manuscript revision:
+
+| Experiment                                            | Script                                                       | Main outputs                                                 |
+| ----------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Dataset composition and quality analysis              | `src/dataset_analysis/analyze_dataset_composition.py`        | Dataset figures, summary tables, and duplicate/conflict records |
+| Isomerism subset and pair-grouped 5-fold CV           | `src/Isomerism_experiment/run_isomerism_cv.py`               | Subset analysis, fold files, Full PGSSI and topology-only results |
+| Interaction-type ablation with pair-grouped 5-fold CV | `src/Interaction_type_ablation/run_interaction_type_ablation.py` | Per-fold and mean +/- std results for six interaction masks  |
+
+All reported MAE, RMSE, and R2 values are calculated on `log-gamma`.
+
 ## Repository Structure
 
 ```text
-PGSSI-github/
+PGSSI/
 |-- dataset/
 |   |-- all/                         # Full merged dataset and train/valid/test splits
+|   |-- Isomerism_experiment/        # Isomerism analysis and pair-grouped folds
+|   |-- Interaction_type_ablation/   # Pair-grouped folds for interaction ablation
 |   |-- wu_et_al/                    # Wu et al. benchmark split
-|   |-- wang_et_al/                  # IDAC2026 external test data
-|   |-- pgssi_ablation_5fold_cv_splits/           # Five-fold splits for the PGSSI ablation study
-|   |-- readout_reference_ablation_fixed_split/   # Fixed split for the readout-reference ablation
-|   `-- water_nonwater_5fold-cv/                  # Five-fold splits for water/non-water evaluation
+|   `-- wang_et_al/                  # IDAC2026 external test data
 |-- src/
 |   |-- models/PGSSI/                # Model architecture, data processing, training, physics loss
 |   |-- benchmark/                   # Wu2004 / IDAC2026 benchmark script
 |   |-- ablation/                    # Ablation experiment scripts
+|   |-- dataset_analysis/            # Dataset composition and quality analysis
+|   |-- Isomerism_experiment/        # Isomerism subset and 5-fold CV
+|   |-- Interaction_type_ablation/   # Interaction-feature ablation and results
 |   |-- isothermal/                  # Isothermal split experiments
 |   |-- interpretability/            # PGSSI interpretation and feature importance analysis
 |   |-- dataset_split/               # Pair-grouped dataset splitting
 |   |-- result_plot/                 # Plotting utilities
-|   |-- pgssi_ablation_5fold_cv/                  # Five-fold PGSSI ablation experiment
-|   |-- readout_reference_ablation/               # Readout-reference ablation experiment
-|   |-- water_nonwater_5fold_cv/                  # Water/non-water five-fold evaluation
 |   `-- continuous interpolation and extrapolation/
 |-- cache/                           # Generated geometry caches
 `-- README.md
@@ -48,24 +60,14 @@ The main CSV files use the following columns:
 
 Included datasets:
 
-| Dataset | File | Samples |
-| --- | --- | ---: |
-| Full merged dataset | `dataset/all/all_merged.csv` | 39,840 |
-| Full train split | `dataset/all/all_merged_train.csv` | 31,853 |
-| Full validation split | `dataset/all/all_merged_valid.csv` | 4,097 |
-| Full test split | `dataset/all/all_merged_test.csv` | 3,890 |
-| Wu et al. train/valid/test | `dataset/wu_et_al/` | 21,284 total |
-| IDAC2026 external data | `dataset/wang_et_al/IDAC_2026_dataset.csv` | 18,556 |
-
- Experiment-Specific Data Splits
-
-| Experiment | Directory | Description |
-| --- | --- | --- |
-| Water/non-water evaluation | `dataset/water_nonwater_5fold-cv/` | Five pair-grouped folds for evaluating water-containing and non-aqueous systems |
-| PGSSI ablation study | `dataset/pgssi_ablation_5fold_cv_splits/` | Five pair-grouped folds used for the PGSSI ablation experiments |
-| Readout-reference ablation | `dataset/readout_reference_ablation_fixed_split/` | Fixed training, validation, and test splits used for the readout-level ablation |
-
-Each five-fold dataset contains training, validation, and test CSV files for folds 1–5. The splits are grouped by solvent-solute pair to prevent pair leakage between subsets.
+| Dataset                    | File                                       |      Samples |
+| -------------------------- | ------------------------------------------ | -----------: |
+| Full merged dataset        | `dataset/all/all_merged.csv`               |       39,840 |
+| Full train split           | `dataset/all/all_merged_train.csv`         |       31,853 |
+| Full validation split      | `dataset/all/all_merged_valid.csv`         |        4,097 |
+| Full test split            | `dataset/all/all_merged_test.csv`          |        3,890 |
+| Wu et al. train/valid/test | `dataset/wu_et_al/`                        | 21,284 total |
+| IDAC2026 external data     | `dataset/wang_et_al/IDAC_2026_dataset.csv` |       18,556 |
 
 ## Environment
 
@@ -87,6 +89,12 @@ conda install -c conda-forge rdkit -y
 # See: https://pytorch-geometric.readthedocs.io/en/latest/install/installation.html
 
 pip install numpy pandas scikit-learn matplotlib tqdm tabulate
+```
+
+Alternatively, after installing a CUDA-compatible PyTorch build, install the remaining project dependencies with:
+
+```bash
+pip install -r requirements.txt
 ```
 
 The first PGSSI run generates 3D molecular-pair geometry caches under `cache/`. This can take time, but later runs reuse the cached data.
@@ -152,6 +160,59 @@ python src/ablation/run_ablation.py \
 ```
 
 
+## Dataset Composition Analysis
+
+Generate the dataset composition figure, publication tables, and duplicate/conflict records:
+
+```bash
+python src/dataset_analysis/analyze_dataset_composition.py \
+  --input-csv dataset/all/all_merged.csv \
+  --output-dir src/dataset_analysis
+```
+
+The analysis reports 39,840 samples, 559 unique solutes, 695 unique solvents, and 13,222 unique solute-solvent pairs. It also summarizes source composition, temperature and `log-gamma` coverage, duplicate/conflicting records, isomeric or stereochemical markers, H-bond-rich systems, and water-containing systems.
+
+
+## Isomerism Subset and 5-Fold Cross-Validation
+
+The isomerism workflow identifies stereochemical/isomeric samples using RDKit canonical and isomeric SMILES, with `@`, `/`, and `\` SMILES markers as a fallback. It then creates solute-solvent-pair-grouped folds and evaluates Full PGSSI against the `--topology-only` baseline on both the full dataset and the isomerism subset.
+
+Prepare the subset and fold files without training:
+
+```bash
+python src/Isomerism_experiment/run_isomerism_cv.py --prepare-only
+```
+
+Run the complete experiment:
+
+```bash
+python src/Isomerism_experiment/prebuild_3d_cache.py
+
+python src/Isomerism_experiment/run_isomerism_cv.py \
+  --epochs 300 \
+  --batch-size 32 \
+  --quiet-progress
+```
+
+The complete per-fold results and paper-ready tables are available in [`src/Isomerism_experiment/`](src/Isomerism_experiment/).
+
+## Interaction-Type Ablation
+
+This experiment masks selected handcrafted intermolecular indicators while retaining distance/radial, Lennard-Jones, Coulomb, and charge-based features. The six settings are Full PGSSI, no H-bond tendency, no aromatic/pi features, no dipole alignment/opposition, no hydrophobic/polar features, and no explicit interaction-type indicators.
+
+```bash
+python src/Interaction_type_ablation/run_interaction_type_ablation.py \
+  --data-path dataset/all/all_merged.csv \
+  --folds-dir dataset/Interaction_type_ablation/folds \
+  --output-dir src/Interaction_type_ablation/outputs_5fold \
+  --cache-dir src/Interaction_type_ablation/cache/datasets \
+  --pair-cache-dir src/Interaction_type_ablation/cache/pair_graphs \
+  --epochs 300 \
+  --early-stopping-patience 50 \
+  --batch-size 32
+```
+
+The complete summary, per-fold metrics, conclusions, and LaTeX tables are available in [`src/Interaction_type_ablation/outputs_5fold/`](src/Interaction_type_ablation/outputs_5fold/).
 
 ## Additional Analyses
 
@@ -163,54 +224,5 @@ python src/isothermal/run_isothermal.py \
   --epochs 50
 ```
 
-Prediction result plots:
-
-```bash
-python src/result_plot/plot_pgssi_results.py \
-  --input runs/pgssi_full/all_merged_train_PGSSI_all_merged_test_predictions.csv \
-  --output-dir runs/pgssi_full/figures
-```
-
 Interpretability and feature-importance scripts are located in `src/interpretability/`. These scripts expect a trained PGSSI checkpoint and a compatible test CSV.
-
-Five-Fold PGSSI Ablation Study
-
-Run the five-fold cross-validation experiment for the PGSSI ablation variants:
-
-```bash
-python src/pgssi_ablation_5fold_cv/pgssi_ablation_5fold_cv.py \
-  --input-path dataset/all/all_merged.csv \
-  --existing-split-dir dataset/pgssi_ablation_5fold_cv_splits \
-  --output-dir runs/pgssi_ablation_5fold_cv \
-  --cache-dir cache/pgssi_ablation_5fold_cv \
-  --n-folds 5 \
-  --seed 42
-```
-
-Readout-Reference Ablation
-
-Run the readout-level reference-information ablation using the fixed dataset split:
-
-```bash
-python src/readout_reference_ablation/readout_reference_ablation.py \
-  --train-path dataset/readout_reference_ablation_fixed_split/all_merged_train.csv \
-  --valid-path dataset/readout_reference_ablation_fixed_split/all_merged_valid.csv \
-  --test-path dataset/readout_reference_ablation_fixed_split/all_merged_test.csv \
-  --output-dir runs/readout_reference_ablation \
-  --cache-dir cache/readout_reference_ablation \
-  --seed 42
-```
-
-Water/Non-Water Five-Fold Evaluation
-
-Run the five-fold evaluation for water-containing and non-aqueous systems:
-
-```bash
-python src/water_nonwater_5fold_cv/water_nonwater_5fold_cv.py \
-  --input-path dataset/all/all_merged.csv \
-  --output-dir runs/water_nonwater_5fold_cv \
-  --cache-dir cache/water_nonwater_5fold_cv \
-  --n-folds 5 \
-  --seed 42
-```
 
